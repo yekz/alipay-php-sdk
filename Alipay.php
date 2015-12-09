@@ -32,7 +32,7 @@ class Alipay {
 
 	var $service               = 'create_direct_pay_by_user';
 	var $service_wap           = 'alipay.wap.trade.create.direct';
-	
+
 	var $alipay_gateway        = 'https://mapi.alipay.com/gateway.do?';
 	var $alipay_gateway_mobile = 'http://wappaygw.alipay.com/service/rest.htm?';
 
@@ -52,11 +52,11 @@ class Alipay {
 
 	/**
 	 * 生成请求参数的签名
-	 * 
+	 *
 	 * @param $params <Array>
 	 *
 	 * @return <String>
-	 * 
+	 *
 	 * TODO:
 	 * 未考虑参数中空格被编码成加号“+”等情况
 	 */
@@ -83,13 +83,13 @@ class Alipay {
 			default :
 				$result = "";
 		}
-		
+
 		return $result;
 	}
 
 	/**
 	 * 生成签名后的请求参数
-	 * 
+	 *
 	 * @param $params <Array>
 	 *        $params['out_trade_no']     唯一订单编号
 	 *        $params['subject']
@@ -102,20 +102,20 @@ class Alipay {
 	 *        $params['_input_charset']
 	 *
 	 * @return <Array>
-	 * 
+	 *
 	 */
 	function buildSignedParameters($params) {
 		$default = array(
 			'service' => $this->service,
-			'partner' => $this->config['partner']
+			'partner' => $this->config['partner'],
+			'notify_url'   => $this->config['notify_url'],
+			'return_url'   => $this->config['return_url']
 		);
 
 		if (!$this->is_mobile) {
 			$default = array_merge($default, array(
 				'payment_type' => $this->config['payment_type'],
 				'seller_id'    => $this->config['partner'],
-				'notify_url'   => $this->config['notify_url'],
-				'return_url'   => $this->config['return_url']
 			));
 		}
 		$params = $this->filterSignParameter(array_merge($default, $params));
@@ -134,13 +134,13 @@ class Alipay {
 	 * 生成请求参数的发送表单HTML
 	 *
 	 * 其实这个函数没有必要，更应该使用签名后的参数自己组装，只不过有时候方便就从官方 SDK 里留下了。
-	 * 
+	 *
 	 * @param $params <Array> 请求参数（未签名的）
 	 * @param $method <String> 请求方法，默认：post，可选 get
 	 * @param $target <String> 提交目标，默认：_self
 	 *
 	 * @return <String>
-	 * 
+	 *
 	 */
 	function buildRequestFormHTML($params, $method = 'post', $target = '_self') {
 		$params = $this->buildSignedParameters($params);
@@ -157,17 +157,17 @@ class Alipay {
 
 	/**
 	 * 准备移动网页支付的请求参数
-	 * 
+	 *
 	 * 移动网页支付接口不同，需要先服务器提交一次请求，拿到返回 token 再返回客户端发起真实支付请求。
 	 * 该方法只完成第一次服务端请求，生成参数后需要客户端另行处理（可调用`buildRequestFormHTML`生成表单提交）。
-	 * 
+	 *
 	 * @param $params <Array>
 	 *        $params['out_trade_no'] 订单唯一编号
 	 *        $params['subject']      商品标题
 	 *        $params['total_fee']    支付总费用
 	 *        $params['merchant_url'] 商品链接地址
 	 *        $params['req_id']       请求唯一 ID
-	 * 
+	 *
 	 * @return <Array>
 	 */
 	function prepareMobileTradeData($params) {
@@ -192,7 +192,7 @@ class Alipay {
 
 			'req_id'            => $params['req_id'],
 			'req_data'          => $xml_str,
-			
+
 			'_input_charset'    => $this->config['input_charset']
 		));
 
@@ -243,27 +243,23 @@ class Alipay {
 
 	/**
 	 * 支付完成验证返回参数（包含同步和异步）
-	 * 
+	 *
 	 * @param $async <Boolean> 是否异步通知模式
-	 * 
+	 *
 	 * @return <Boolean>
 	 */
-	function verifyCallback() {
-		$async = empty($_GET);
-
-		$data = $async ? $_POST : $_GET;
+	function verifyCallback($data, $async) {
 		if (empty($data)) {
 			return FALSE;
 		}
-
 		$signValid = $this->verifyParameters($data, $data["sign"]);
-		$notify_id = $data['notify_id'];
+
 		if ($async && $this->is_mobile){
 			//对notify_data解密
 			if ($this->config['sign_type'] == '0001') {
 				$data['notify_data'] = $this->rsaDecrypt($data['notify_data'], $this->config['private_key_path']);
 			}
-			
+
 			//notify_id从decrypt_post_para中解析出来（也就是说decrypt_post_para中已经包含notify_id的内容）
 			$doc = new DOMDocument();
 			$doc->loadXML($data['notify_data']);
@@ -271,9 +267,11 @@ class Alipay {
 		}
 		//获取支付宝远程服务器ATN结果（验证是否是支付宝发来的消息）
 		$responseTxt = 'true';
-		if (! empty($notify_id)) {
+		$notify_id = $data['notify_id'];
+		if (!empty($notify_id)) {
 			$responseTxt = $this->verifyFromServer($notify_id);
 		}
+
 		//验证
 		//$signValid的结果不是true，与安全校验码、请求时的参数格式（如：带自定义参数等）、编码格式有关
 		//$responsetTxt的结果不是true，与服务器设置问题、合作身份者ID、notify_id一分钟失效有关
@@ -287,12 +285,14 @@ class Alipay {
 			ksort($params);
 			reset($params);
 		} else {
-			$params = array(
-				'service' => $params['service'],
-				'v' => $params['v'],
-				'sec_id' => $params['sec_id'],
-				'notify_data' => $params['notify_data']
-			);
+			if (isset($params['service'])) {
+				$params = array(
+					'service' => $params['service'],
+					'v' => $params['v'],
+					'sec_id' => $params['sec_id'],
+					'notify_data' => $params['notify_data']
+				);
+			}
 		}
 
 		$content = urldecode(http_build_query($params));
@@ -347,7 +347,7 @@ class Alipay {
 		$pubKey = file_get_contents($ali_public_key_path);
 		$res = openssl_get_publickey($pubKey);
 		$result = (bool)openssl_verify($data, base64_decode($sign), $res);
-		openssl_free_key($res);    
+		openssl_free_key($res);
 		return $result;
 	}
 
